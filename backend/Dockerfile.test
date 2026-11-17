@@ -1,0 +1,10 @@
+FROM python:3.13-slim-bookworm
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY backend/requirements*.txt backend/constraints-tested.txt ./
+RUN pip install --no-cache-dir -c constraints-tested.txt -r requirements-test.txt
+COPY backend/app ./app
+COPY backend/tests ./tests
+COPY contracts ./contracts
+CMD ["pytest","-q","tests"]

@@ -1,0 +1,152 @@
+x-app: &app
+  image: bae-weryfikator-backend:0.2.1
+  restart: unless-stopped
+  env_file: .env
+  environment: &env
+    DATABASE_URL: postgresql+psycopg://bae@db/bae
+    DB_PASSWORD_FILE: /run/bae/db_password
+    REDIS_URL: redis://redis:6379/0
+    REDIS_PASSWORD_FILE: /run/bae/redis_password
+    DATA_KEY_FILE: /run/bae/data_key
+    INDEX_KEY_FILE: /run/bae/index_key
+    SE_CONTRACT: /app/contracts/se-api_v.4.0.5.yaml
+    COOKIE_SECURE: 'true'
+    BAE_INT_KEY_FILE: /run/bae/int.key
+    BAE_INT_CERT_FILE: /run/bae/int.crt
+    BAE_PROD_KEY_FILE: /run/bae/prod.key
+    BAE_PROD_CERT_FILE: /run/bae/prod.crt
+  group_add:
+    - '${BAE_SECRET_GID:-1000}'
+  volumes:
+    - ./secrets:/run/bae:ro
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=512m,mode=1777
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop: [ALL]
+  networks: [internal,egress]
+  depends_on:
+    db: {condition: service_healthy}
+    redis: {condition: service_healthy}
+    migrate: {condition: service_completed_successfully}
+services:
+  db:
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: bae
+      POSTGRES_USER: bae
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    secrets: [db_password]
+    healthcheck:
+      test: ['CMD-SHELL','pg_isready -U bae -d bae']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [internal]
+  redis:
+    user: redis
+    group_add: ['${BAE_SECRET_GID:-1000}']
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+    image: redis:7.4-bookworm
+    restart: unless-stopped
+    # Keep the password out of argv. Configuration is created only on tmpfs.
+    entrypoint: ['/bin/sh','-ec']
+    command:
+      - |
+        umask 077
+        printf 'bind 0.0.0.0\nprotected-mode yes\nport 6379\nappendonly no\nsave ""\nrequirepass %s\n' "$$(cat /run/secrets/redis_password)" > /tmp/redis.conf
+        exec redis-server /tmp/redis.conf
+    secrets: [redis_password]
+    tmpfs: ['/tmp:rw,noexec,nosuid,size=16m,mode=1777']
+    healthcheck:
+      test: ['CMD-SHELL','REDISCLI_AUTH="$$(cat /run/secrets/redis_password)" redis-cli ping | head -c 4 | xargs test PONG =']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [internal]
+  migrate:
+    <<: *app
+    restart: 'no'
+    command: ['alembic','upgrade','head']
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+  api:
+    <<: *app
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    healthcheck:
+      test: ['CMD','python','-c',"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health/live')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+  worker:
+    <<: *app
+    command: ['python','-m','app.worker']
+    healthcheck:
+      test: ['CMD','python','-c',"from app.security import cache; assert cache.get('worker:heartbeat')"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+  web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    image: bae-weryfikator-web:0.2.1
+    restart: unless-stopped
+    env_file: .env
+    ports: ['443:443','80:80']
+    volumes:
+      - caddydata:/data
+      - caddyconfig:/config
+    depends_on:
+      api: {condition: service_healthy}
+    networks: [internal,egress]
+  dbtest:
+    profiles: [test]
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_DB: bae_test
+      POSTGRES_USER: bae
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets: [db_password]
+    tmpfs: ['/var/lib/postgresql/data:rw,size=1g,mode=0700']
+    healthcheck:
+      test: ['CMD-SHELL','pg_isready -U bae -d bae_test']
+      interval: 3s
+      timeout: 5s
+      retries: 20
+    networks: [internal]
+  test:
+    profiles: [test]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.test
+    environment:
+      BAE_TEST_DATABASE_URL: postgresql+psycopg://bae@dbtest/bae_test
+      DB_PASSWORD_FILE: /run/bae/db_password
+      SE_CONTRACT: /app/contracts/se-api_v.4.0.5.yaml
+    group_add: ['${BAE_SECRET_GID:-1000}']
+    volumes: ['./secrets:/run/bae:ro']
+    depends_on:
+      dbtest: {condition: service_healthy}
+    networks: [internal]
+secrets:
+  db_password:
+    file: ./secrets/db_password
+  redis_password:
+    file: ./secrets/redis_password
+volumes:
+  pgdata:
+  caddydata:
+  caddyconfig:
+networks:
+  internal:
+    internal: true
+  egress: {}
