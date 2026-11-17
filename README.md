@@ -41,3 +41,7 @@ Do uruchomienia wymagane są Linux, Docker Engine z Compose v2 i Python 3. Zapyt
 ## Audyt sprawdzeń i eksportów
 
 Widok **Historia zadań → Sprawdzenia i eksporty** pozwala administratorowi odczytać login operatora, kryteria prób wyszukiwania i zawartość wygenerowanych plików. Raport CSV obejmuje wszystkie operacje w wybranym okresie i jest dostępny w tym samym widoku. Zakres danych i retencję opisuje [instrukcja audytu](docs/AUDYT.md). Procedura dla działającego wdrożenia znajduje się w [instrukcji aktualizacji](docs/AKTUALIZACJA.md).
+
+## Firewall/UTM ##
+
+Na firewallu/UTM można zostawić tylko HTTPS resztę można zablokować
